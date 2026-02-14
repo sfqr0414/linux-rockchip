@@ -663,12 +663,6 @@ static int hci_uart_register_dev(struct hci_uart *hu)
 	hdev->setup = hci_uart_setup;
 	SET_HCIDEV_DEV(hdev, hu->tty->dev);
 
-	// Set the broken Park link status quirk, specific for spreadtrum (sprd)
-	// bluetooth devices
-	if (hdev->manufacturer == 0xffff && hu->tty->driver &&
-		strncmp(hu->tty->driver->name, "ttyBT", 5) == 0)
-		set_bit(HCI_QUIRK_BROKEN_PARK_LINK_STATUS, &hdev->quirks);
-
 	if (test_bit(HCI_UART_RAW_DEVICE, &hu->hdev_flags))
 		set_bit(HCI_QUIRK_RAW_DEVICE, &hdev->quirks);
 
@@ -781,7 +775,8 @@ static int hci_uart_tty_ioctl(struct tty_struct *tty, unsigned int cmd,
 		break;
 
 	case HCIUARTGETPROTO:
-		if (test_bit(HCI_UART_PROTO_SET, &hu->flags))
+		if (test_bit(HCI_UART_PROTO_SET, &hu->flags) &&
+		    test_bit(HCI_UART_PROTO_READY, &hu->flags))
 			err = hu->proto->id;
 		else
 			err = -EUNATCH;

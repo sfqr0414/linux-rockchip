@@ -27,10 +27,6 @@
 		usbdp1 = &usbdp_phy1;
 	};
 
-	system {
-		cpu,model = "Rockchip RK3588";
-	};
-
 	rkcif_mipi_lvds4: rkcif-mipi-lvds4 {
 		compatible = "rockchip,rkcif-mipi-lvds";
 		rockchip,hw = <&rkcif>;
@@ -255,6 +251,7 @@
 		resets = <&cru SRST_M_I2S7_8CH_RX>;
 		reset-names = "rx-m";
 		rockchip,capture-only;
+		rockchip,i2s-rx-wait-time-ms = <50>;
 		#sound-dai-cells = <0>;
 		status = "disabled";
 	};

@@ -67,6 +67,8 @@ DHDCFLAGS = -Wall -Wstrict-prototypes -Wno-date-time -Wno-strict-prototypes   \
 	-DKEY_INSTALL_CHECK                                                   \
 	-DENABLE_INSMOD_NO_FW_LOAD
 
+DHDCFLAGS += -Wframe-larger-than=2048
+
 DHDOFILES = aiutils.o siutils.o sbutils.o                                 \
 	bcmutils.o bcmwifi_channels.o bcmxtlv.o bcm_app_utils.o bcmstdlib_s.o \
 	dhd_linux.o dhd_linux_platdev.o dhd_linux_sched.o dhd_pno.o           \
@@ -324,7 +326,7 @@ ifneq ($(CONFIG_CFG80211),)
 ifneq ($(CONFIG_BCMDHD_SDIO),)
 	DHDCFLAGS += -DRXF_DEQUEUE_ON_BUSY
 endif
-#	DHDCFLAGS += -DWL_STATIC_IF
+	DHDCFLAGS += -DWL_STATIC_IF
 endif
 endif
 
@@ -478,7 +480,6 @@ EXTRA_CFLAGS += -I$(srctree)/$(BCMDHD_ROOT)/include/ -I$(srctree)/$(BCMDHD_ROOT)
 ifeq ($(CONFIG_AP6XXX),m)
 EXTRA_LDFLAGS += --strip-debug
 endif
-EXTRA_CFLAGS += -I$(srctree)/drivers/net/wireless/rockchip_wlan/rkwifi/bcmdhd/include
 
 obj-$(CONFIG_AP6XXX) += $(MODULE_NAME).o
 $(MODULE_NAME)-objs += $(DHDOFILES)

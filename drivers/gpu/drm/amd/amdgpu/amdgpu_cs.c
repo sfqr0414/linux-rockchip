@@ -257,6 +257,10 @@ static int amdgpu_cs_pass1(struct amdgpu_cs_parser *p,
 			if (size < sizeof(struct drm_amdgpu_bo_list_in))
 				goto free_partial_kdata;
 
+			/* Only a single BO list is allowed to simplify handling. */
+			if (p->bo_list)
+				goto free_partial_kdata;
+
 			ret = amdgpu_cs_p1_bo_handles(p, p->chunks[i].kdata);
 			if (ret)
 				goto free_partial_kdata;
@@ -285,8 +289,11 @@ static int amdgpu_cs_pass1(struct amdgpu_cs_parser *p,
 		if (ret)
 			goto free_all_kdata;
 
-		ret = drm_sched_job_init(&p->jobs[i]->base, p->entities[i],
-					 &fpriv->vm);
+		ret = drm_sched_job_init(&p->jobs[i]->base,
+					 p->entities[i],
+					 1, /* credits */
+					 &fpriv->vm, /* owner */
+					 p->filp->client_id);
 		if (ret)
 			goto free_all_kdata;
 	}
