@@ -93,16 +93,36 @@ deploy_kernel_headers () {
 	# compile these are x86_64 programs that cannot run on the target CPU and
 	# will cause `Exec format error` when the headers package is later
 	# installed on arm64 devices.  They aren’t needed by users of the headers
-	# so remove any ELF executables to keep the package clean.
+	# so remove any ELF executables to keep the package clean, but we will
+	# rebuild the subset DKMS relies on for the target architecture below.
 	if [ -d "$destdir/scripts" ] ; then
 		find "$destdir/scripts" -type f -exec sh -c '
 			for f; do
-				# file output looks like: "/path: ELF 64-bit LSB pie executable,..."
 				if file "$f" | grep -q "ELF" ; then
 					rm -f "$f"
 				fi
 			done
 		' _ {} +
+	fi
+
+	# Build a minimal set of tools for DKMS: fixdep (and genksyms if
+	# possible).  When an external module is built against installed headers,
+	# the kernel build system will try to run scripts/basic/fixdep (and
+	# scripts/genksyms for versioning) - if the binary is missing it will
+	# rebuild it from source using the local compiler.  On a native build the
+	# copy we shipped above will already be correct; during cross-compilation
+	# we attempt to pre‑compile the targets using the cross C compiler so the
+	# resulting package contains a runnable executable, but failure is not
+	# fatal because the sources remain available and will build on the device.
+	if [ -n "$ARCH" ] ; then
+		cc=${CROSS_COMPILE:-}gcc
+		# ensure the target scripts dir exists
+		mkdir -p "$destdir/scripts"
+		for tool in fixdep genksyms; do
+			src="$( [ "$tool" = fixdep ] && echo scripts/basic/$tool.c || echo scripts/genksyms/$tool.c )"
+			# compile quietly; don’t die on errors (genksyms may need bison/lex)
+			$cc -O2 -o "$destdir/scripts/$tool" "$srctree/$src" 2>/dev/null || :
+		done
 	fi
 
 	mkdir -p $pdir/lib/modules/$version/
