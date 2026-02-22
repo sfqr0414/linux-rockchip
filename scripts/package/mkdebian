@@ -24,7 +24,18 @@ set_debarch() {
 		return
 	fi
 
-	# Attempt to find the correct Debian architecture
+	# If ARCH is set (e.g. cross‐compile) ask dpkg-architecture for the
+	# corresponding Debian architecture.  This avoids relying on the host’s
+	# UTS_MACHINE, which is wrong when building for a different CPU.
+	if [ -n "$ARCH" ]; then
+		# dpkg-architecture accepts -a<arch> to select the architecture.
+		debarch=$(dpkg-architecture -a$ARCH -qDEB_HOST_ARCH 2>/dev/null || true)
+		if [ -n "$debarch" ]; then
+			return
+		fi
+	fi
+
+	# Attempt to find the correct Debian architecture from the host name
 	case "$UTS_MACHINE" in
 	i386|ia64|alpha|m68k|riscv*)
 		debarch="$UTS_MACHINE" ;;

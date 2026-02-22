@@ -87,6 +87,24 @@ deploy_kernel_headers () {
 	# copy .config manually to be where it's expected to be
 	cp $KCONFIG_CONFIG $destdir/.config
 
+	# [PATCH] avoid shipping host‑architecture binaries in headers package
+	# The builddeb helper simply tars up the current "scripts" tree, which
+	# contains fixdep/genksyms/objtool built for the host.  On a cross
+	# compile these are x86_64 programs that cannot run on the target CPU and
+	# will cause `Exec format error` when the headers package is later
+	# installed on arm64 devices.  They aren’t needed by users of the headers
+	# so remove any ELF executables to keep the package clean.
+	if [ -d "$destdir/scripts" ] ; then
+		find "$destdir/scripts" -type f -exec sh -c '
+			for f; do
+				# file output looks like: "/path: ELF 64-bit LSB pie executable,..."
+				if file "$f" | grep -q "ELF" ; then
+					rm -f "$f"
+				fi
+			done
+		' _ {} +
+	fi
+
 	mkdir -p $pdir/lib/modules/$version/
 	ln -s /usr/src/linux-headers-$version $pdir/lib/modules/$version/build
 }
