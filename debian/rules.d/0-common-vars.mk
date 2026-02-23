@@ -127,7 +127,15 @@ prev_abidir	:= $(CURDIR)/$(DEBIAN)/abi/$(arch)
 commonconfdir	:= $(CURDIR)/$(DEBIAN)/config
 archconfdir	:= $(CURDIR)/$(DEBIAN)/config/$(arch)
 sharedconfdir	:= $(CURDIR)/debian.master/config
+# Allow the build directory to be overridden by the environment variable
+# BUILD_DIR so callers (like our test script) can force packaging into a
+# custom location.  If BUILD_DIR is not defined, fall back to the default
+# debian/build path.
+ifeq ($(origin BUILD_DIR),undefined)
 builddir	:= $(CURDIR)/debian/build
+else
+builddir	:= $(BUILD_DIR)
+endif
 stampdir	:= $(CURDIR)/debian/stamps
 
 #
