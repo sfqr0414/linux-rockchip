@@ -12,6 +12,16 @@
 
 set -e
 
+is_target_elf() {
+	local elf_file="$1"
+	[ -f "$elf_file" ] || return 1
+	local target_arch="$ARCH"
+	if [ "$target_arch" = "arm64" ]; then
+		target_arch="aarch64"
+	fi
+	readelf -h "$elf_file" | grep -iq "Machine:.*$target_arch"
+}
+
 is_enabled() {
 	grep -q "^$1=y" include/config/auto.conf
 }
@@ -22,7 +32,6 @@ if_enabled_echo() {
 	elif [ $# -ge 3 ]; then
 		echo -n "$3"
 	fi
-}
 
 create_package() {
 	local pname="$1" pdir="$2"
@@ -86,6 +95,26 @@ deploy_kernel_headers () {
 
 	# copy .config manually to be where it's expected to be
 	cp $KCONFIG_CONFIG $destdir/.config
+
+	if ! is_target_elf "$destdir/scripts/basic/fixdep" || \
+	   ! is_target_elf "$destdir/scripts/genksyms/genksyms" || \
+	   ! is_target_elf "$destdir/scripts/mod/modpost"; then
+		echo "Cross-compiling scripts for target architecture ($ARCH)..."
+		# 1. fixdep (easy, no dependencies)
+		$CC -O2 -I$srctree/scripts/basic -o "$destdir/scripts/basic/fixdep" $srctree/scripts/basic/fixdep.c
+		# 2. genksyms
+		$CC -O2 -I$srctree/scripts/genksyms -I"$destdir/scripts/genksyms" \
+			-o "$destdir/scripts/genksyms/genksyms" \
+			$srctree/scripts/genksyms/genksyms.c \
+			"$destdir/scripts/genksyms/lex.lex.c" \
+			"$destdir/scripts/genksyms/parse.tab.c"
+		# 3. modpost
+		$CC -O2 -I$srctree/scripts/mod -I"$destdir/scripts/mod" \
+			-o "$destdir/scripts/mod/modpost" \
+			$srctree/scripts/mod/modpost.c \
+			$srctree/scripts/mod/file2alias.c \
+			$srctree/scripts/mod/sumversion.c
+	fi
 
 	mkdir -p $pdir/lib/modules/$version/
 	ln -s /usr/src/linux-headers-$version $pdir/lib/modules/$version/build
