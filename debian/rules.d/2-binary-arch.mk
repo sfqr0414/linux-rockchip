@@ -323,6 +323,29 @@ endif
 	cp $(builddir)/build-$*/.config $(hdrdir)
 	chmod 644 $(hdrdir)/.config
 	$(kmake) O=$(hdrdir) -j1 syncconfig prepare scripts
+	# Cross-compile key scripts for target architecture.
+	# We use manual compilation here because forcing Kbuild to cross-compile its own tools
+	# while preventing it from trying to run them (which would fail) is brittle.
+	@echo "Cross-compiling scripts for target architecture..."
+	(cd $(hdrdir) && \
+		$(CC) -Iscripts/basic $(CURDIR)/scripts/basic/fixdep.c -o scripts/basic/fixdep && \
+		$(CC) -Iscripts/mod -I$(CURDIR)/scripts/mod $(CURDIR)/scripts/mod/modpost.c $(CURDIR)/scripts/mod/file2alias.c $(CURDIR)/scripts/mod/sumversion.c -o scripts/mod/modpost && \
+		$(CC) -Iscripts/genksyms -I$(CURDIR)/scripts/genksyms $(CURDIR)/scripts/genksyms/genksyms.c scripts/genksyms/lex.lex.c scripts/genksyms/parse.tab.c -o scripts/genksyms/genksyms)
+	# Validate headers tools architecture
+	@is_target_elf() { \
+		local elf_file="$$1"; \
+		[ -f "$$elf_file" ] || return 1; \
+		local target_arch="$(arch)"; \
+		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
+		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
+	}; \
+	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
+	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
+	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
+		echo "WARNING: Headers tools architecture mismatch detected after manual rebuild."; \
+	else \
+		echo "Successfully cross-compiled scripts for target architecture."; \
+	fi
 	# We'll symlink this stuff
 	rm -f $(hdrdir)/Makefile
 	rm -rf $(hdrdir)/include2 $(hdrdir)/source
