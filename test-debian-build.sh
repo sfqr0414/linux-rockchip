@@ -24,30 +24,44 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 export CC=aarch64-linux-gnu-gcc
 export LANG=C
 
-# 预先确保 O= 构建目录已准备（避免在 debian/rules 中触发交互式配置）
 BUILD_DIR="../build"
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
+BUILD_DIR=$(realpath "$BUILD_DIR")
 
-if [ ! -f "$BUILD_DIR/include/generated/autoconf.h" ]; then
-    echo "准备: make O=$BUILD_DIR ARCH=arm64 olddefconfig && make O=$BUILD_DIR ARCH=arm64 prepare (非交互)"
-    # 如果还没有配置文件，复制一个默认配置以避免交互式提示
-    if [ ! -f "$BUILD_DIR/.config" ]; then
-        echo "复制默认配置到 $BUILD_DIR/.config"
-        cp debian.rockchip/config/config.common.ubuntu "$BUILD_DIR/.config" 2>/dev/null || true
+cleanup() {
+    exit_code=${1:-$?}
+    if [[ "$exit_code" -ne 0 ]]; then
+        echo "❌ Script exited abnormally"
+    else
+        echo "✅ Script exited successfully"
     fi
-    make O="$BUILD_DIR" ARCH=arm64 olddefconfig || { echo "olddefconfig 失败"; exit 1; }
-    make O="$BUILD_DIR" ARCH=arm64 prepare || { echo "prepare 失败"; exit 1; }
-fi
+
+    TARGET_DIR="$BUILD_DIR/build-rockchip"
+    if mountpoint -q "$TARGET_DIR"; then
+        sudo umount -l "$TARGET_DIR"
+        if [ $? -eq 0 ]; then
+            echo "成功卸载 $TARGET_DIR"
+        else
+            echo "卸载 $TARGET_DIR 失败（可能被进程占用）"
+        fi
+    fi
+    exit "$exit_code"
+}
+
+trap 'cleanup $?' EXIT HUP INT TERM QUIT
+
+export BUILD_DIR
 
 echo "执行: fakeroot debian/rules clean (non-interactive)"
 DEBIAN_FRONTEND=noninteractive fakeroot debian/rules clean 2>&1 || { echo "clean 步骤失败"; exit 1; }
+
+mkdir -p "$BUILD_DIR/build-rockchip"
+sudo mount -t tmpfs -o size=12G none "$BUILD_DIR/build-rockchip"
 
 echo "执行: fakeroot debian/rules binary-headers binary-rockchip do_mainline_build=true (non-interactive)"
 DEBIAN_FRONTEND=noninteractive \
 DH_OPTIONS="--destdir=$BUILT_PACKAGES_ABS" \
 fakeroot debian/rules binary-headers binary-rockchip do_mainline_build=true \
-MAKEFLAGS="--silentoldconfig -j$(nproc)" 2>&1 < <(yes '') || {
+MAKEFLAGS="-j$(nproc) O=$BUILD_DIR" 2>&1 < <(yes '') || {
     echo "编译内核失败";
     exit 1; 
 }

@@ -13,6 +13,22 @@
 
 set -e
 
+# Helper: return 0 if file is an ELF binary, 1 otherwise
+is_elf() {
+	fpath="$1"
+	if [ -z "$fpath" ]; then
+		return 1
+	fi
+	if command -v file >/dev/null 2>&1; then
+		file -Lb "$fpath" 2>/dev/null | grep -q "ELF"
+		return $?
+	fi
+	if [ -f "$fpath" ]; then
+		dd if="$fpath" bs=1 count=4 2>/dev/null | od -An -t x1 | tr -d ' \t\n' | grep -qi '^7f454c46' && return 0 || return 1
+	fi
+	return 1
+}
+
 #
 # Some variables and settings used throughout the script
 #
@@ -160,6 +176,23 @@ fi
 if tar --owner=root --group=root --help >/dev/null 2>&1; then
 	opts="$opts --owner=root --group=root"
 fi
+
+# Remove host-built ELF binaries from likely locations in the temporary
+# install tree (scripts, tools, scripts/gcc-plugins) so tarballs don't
+# contain x86_64 tools when cross-building. Resolve symlinks before
+# checking so we don't leave dangling links.
+for d in "$tmpdir"/usr/src/*/scripts "$tmpdir"/usr/src/*/tools "$tmpdir"/usr/src/*/scripts/gcc-plugins; do
+	[ -d "$d" ] || continue
+	find "$d" \( -type f -o -type l \) | while read -r f; do
+		target="$f"
+		if [ -h "$f" ]; then
+			target=$(readlink -f "$f" 2>/dev/null || true)
+		fi
+		if [ -n "$target" ] && [ -f "$target" ] && is_elf "$target"; then
+			rm -f "$f"
+		fi
+	done
+done
 
 tar cf $tarball -C $tmpdir $opts $dirs
 
