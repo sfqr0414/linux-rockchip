@@ -24,23 +24,6 @@ if_enabled_echo() {
 	fi
 }
 
-# Helper: return 0 if file is an ELF binary, 1 otherwise
-is_elf() {
-	fpath="$1"
-	if [ -z "$fpath" ]; then
-		return 1
-	fi
-	if command -v file >/dev/null 2>&1; then
-		file -Lb "$fpath" 2>/dev/null | grep -q "ELF"
-		return $?
-	fi
-	# fallback: check ELF magic 0x7f454c46
-	if [ -f "$fpath" ]; then
-		dd if="$fpath" bs=1 count=4 2>/dev/null | od -An -t x1 | tr -d ' \t\n' | grep -qi '^7f454c46' && return 0 || return 1
-	fi
-	return 1
-}
-
 create_package() {
 	local pname="$1" pdir="$2"
 	local dpkg_deb_opts
@@ -78,46 +61,20 @@ deploy_kernel_headers () {
 	(
 		cd $srctree
 		find . arch/$SRCARCH -maxdepth 1 -name Makefile\*
-		# collect include and scripts entries but filter out host-built ELF executables
-		find include scripts -type f -o -type l | while read -r f; do
-			if [ -f "$f" ] && is_elf "$f"; then
-				continue
-			fi
-			echo "$f"
-		done
+		find include scripts -type f -o -type l
 		find arch/$SRCARCH -name Kbuild.platforms -o -name Platform
-		find $(find arch/$SRCARCH -name include -o -name scripts -type d) -type f | while read -r f; do
-			if [ -f "$f" ] && is_elf "$f"; then
-				continue
-			fi
-			echo "$f"
-		done
+		find $(find arch/$SRCARCH -name include -o -name scripts -type d) -type f
 	) > debian/hdrsrcfiles
 
 	{
 		if is_enabled CONFIG_OBJTOOL; then
-			# only include tools/objtool/objtool if it is not a host-built ELF
-			if [ -f tools/objtool/objtool ] && is_elf tools/objtool/objtool; then
-				:
-			else
-				echo tools/objtool/objtool
-			fi
+			echo tools/objtool/objtool
 		fi
 
-		find arch/$SRCARCH/include Module.symvers include scripts -type f | while read -r f; do
-			if [ -f "$f" ] && [ -x "$f" ] && is_elf "$f"; then
-				continue
-			fi
-			echo "$f"
-		done
+		find arch/$SRCARCH/include Module.symvers include scripts -type f
 
 		if is_enabled CONFIG_GCC_PLUGINS; then
-			find scripts/gcc-plugins -name \*.so | while read -r f; do
-				if [ -f "$f" ] && is_elf "$f"; then
-					continue
-				fi
-				echo "$f"
-			done
+			find scripts/gcc-plugins -name \*.so
 		fi
 	} > debian/hdrobjfiles
 
@@ -129,48 +86,6 @@ deploy_kernel_headers () {
 
 	# copy .config manually to be where it's expected to be
 	cp $KCONFIG_CONFIG $destdir/.config
-
-	# [PATCH] avoid shipping host‑architecture binaries in headers package
-	# Remove any host-built ELF executables from likely locations in the
-	# headers destdir (scripts, tools, scripts/gcc-plugins).  We use the
-	# is_elf() helper above so this works without relying on a specific
-	# 'file' output format here and covers more paths than the original
-	# implementation which only handled $destdir/scripts.
-	for d in "$destdir/scripts" "$destdir/tools" "$destdir/scripts/gcc-plugins"; do
-		if [ -d "$d" ] ; then
-			# include regular files and symlinks; resolve symlinks when checking ELF
-			find "$d" \( -type f -o -type l \) | while read -r f; do
-				target="$f"
-				if [ -h "$f" ]; then
-					# resolve symlink if possible
-					target=$(readlink -f "$f" 2>/dev/null || true)
-				fi
-				if [ -n "$target" ] && [ -f "$target" ] && is_elf "$target"; then
-					rm -f "$f"
-				fi
-			done
-		fi
-	done
-
-	# Build a minimal set of tools for DKMS: fixdep (and genksyms if
-	# possible).  When an external module is built against installed headers,
-	# the kernel build system will try to run scripts/basic/fixdep (and
-	# scripts/genksyms for versioning) - if the binary is missing it will
-	# rebuild it from source using the local compiler.  On a native build the
-	# copy we shipped above will already be correct; during cross-compilation
-	# we attempt to pre‑compile the targets using the cross C compiler so the
-	# resulting package contains a runnable executable, but failure is not
-	# fatal because the sources remain available and will build on the device.
-	if [ -n "$ARCH" ] ; then
-		cc=${CROSS_COMPILE:-}gcc
-		# ensure the target scripts dir exists
-		mkdir -p "$destdir/scripts"
-		for tool in fixdep genksyms; do
-			src="$( [ "$tool" = fixdep ] && echo scripts/basic/$tool.c || echo scripts/genksyms/$tool.c )"
-			# compile quietly; don’t die on errors (genksyms may need bison/lex)
-			$cc -O2 -o "$destdir/scripts/$tool" "$srctree/$src" 2>/dev/null || :
-		done
-	fi
 
 	mkdir -p $pdir/lib/modules/$version/
 	ln -s /usr/src/linux-headers-$version $pdir/lib/modules/$version/build
