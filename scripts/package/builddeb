@@ -100,20 +100,20 @@ deploy_kernel_headers () {
 	   ! is_target_elf "$destdir/scripts/genksyms/genksyms" || \
 	   ! is_target_elf "$destdir/scripts/mod/modpost"; then
 		echo "Cross-compiling scripts for target architecture ($ARCH)..."
-		# 1. fixdep (easy, no dependencies)
-		$CC -O2 -I$srctree/scripts/basic -o "$destdir/scripts/basic/fixdep" $srctree/scripts/basic/fixdep.c
-		# 2. genksyms
-		$CC -O2 -I$srctree/scripts/genksyms -I"$destdir/scripts/genksyms" \
-			-o "$destdir/scripts/genksyms/genksyms" \
-			$srctree/scripts/genksyms/genksyms.c \
-			"$destdir/scripts/genksyms/lex.lex.c" \
-			"$destdir/scripts/genksyms/parse.tab.c"
-		# 3. modpost
-		$CC -O2 -I$srctree/scripts/mod -I"$destdir/scripts/mod" \
-			-o "$destdir/scripts/mod/modpost" \
-			$srctree/scripts/mod/modpost.c \
-			$srctree/scripts/mod/file2alias.c \
-			$srctree/scripts/mod/sumversion.c
+		# Hijack HOSTCC and use Kbuild to rebuild tools for the target architecture.
+		# The cmd_and_fixdep override is critical to bypass fixdep execution during the rebuild.
+		rm -f "$destdir/scripts/basic/fixdep" "$destdir/scripts/genksyms/genksyms" "$destdir/scripts/mod/modpost"
+		$MAKE -f $srctree/Makefile O=$destdir -j1 HOSTCC="$CC" HOSTLD="$CC" HOSTCFLAGS="-O2" \
+			cmd_and_fixdep='$(cmd_$$(1))' \
+			cmd_elfconfig='true' \
+			scripts/basic/ scripts/mod/ scripts/genksyms/
+
+		if ! is_target_elf "$destdir/scripts/basic/fixdep" || \
+		   ! is_target_elf "$destdir/scripts/genksyms/genksyms" || \
+		   ! is_target_elf "$destdir/scripts/mod/modpost"; then
+			echo "Failed to cross-compile scripts for $ARCH architecture." >&2
+			exit 1
+		fi
 	fi
 
 	mkdir -p $pdir/lib/modules/$version/

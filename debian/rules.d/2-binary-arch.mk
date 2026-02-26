@@ -324,25 +324,30 @@ endif
 	chmod 644 $(hdrdir)/.config
 	$(kmake) O=$(hdrdir) -j1 syncconfig prepare scripts
 	# Cross-compile key scripts for target architecture.
-	# We use manual compilation here because forcing Kbuild to cross-compile its own tools
-	# while preventing it from trying to run them (which would fail) is brittle.
+	# By hijacking HOSTCC, we use Kbuild to compile its own tools for the target architecture.
+	# The cmd_and_fixdep override prevents Kbuild from executing the newly built target-fixdep binary.
+	# The cmd_elfconfig='true' override prevents Kbuild from executing target-mk_elfconfig (which fails on x86).
 	@echo "Cross-compiling scripts for target architecture..."
-	(cd $(hdrdir) && \
-		$(CC) -Iscripts/basic $(CURDIR)/scripts/basic/fixdep.c -o scripts/basic/fixdep && \
-		$(CC) -Iscripts/mod -I$(CURDIR)/scripts/mod $(CURDIR)/scripts/mod/modpost.c $(CURDIR)/scripts/mod/file2alias.c $(CURDIR)/scripts/mod/sumversion.c -o scripts/mod/modpost && \
-		$(CC) -Iscripts/genksyms -I$(CURDIR)/scripts/genksyms $(CURDIR)/scripts/genksyms/genksyms.c scripts/genksyms/lex.lex.c scripts/genksyms/parse.tab.c -o scripts/genksyms/genksyms)
+	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
+	-$(kmake) O=$(hdrdir) -j1 HOSTCC=$(CC) HOSTLD=$(CC) HOSTCFLAGS="-O2" \
+		cmd_and_fixdep='$$(cmd_$$(1))' \
+		cmd_elfconfig='true' \
+		scripts/basic/ scripts/mod/ scripts/genksyms/
 	# Validate headers tools architecture
 	@is_target_elf() { \
 		local elf_file="$$1"; \
-		[ -f "$$elf_file" ] || return 1; \
+		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
 		local target_arch="$(arch)"; \
 		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
+		local actual_arch=$$(readelf -h "$$elf_file" | grep "Machine:" | cut -d: -f2- | xargs); \
+		echo "Audit $$elf_file: Machine = $$actual_arch (expected $$target_arch)"; \
 		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
 	}; \
 	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
 	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
 	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
-		echo "WARNING: Headers tools architecture mismatch detected after manual rebuild."; \
+		echo "ERROR: Headers tools architecture mismatch detected after rebuild."; \
+		exit 1; \
 	else \
 		echo "Successfully cross-compiled scripts for target architecture."; \
 	fi
