@@ -71,7 +71,7 @@ define build_dkms_sign =
 	)
 endef
 define build_dkms =
-	rc=0; ARCH=$(build_arch) CROSS_COMPILE=$(CROSS_COMPILE) $(SHELL) $(DROOT)/scripts/dkms-build $(dkms_dir) $(abi_release)-$* '$(call build_dkms_sign,$(builddir)/build-$*)' $(1) $(2) $(3) $(4) $(5) || rc=$$?; if [ "$$rc" = "9" ]; then echo do_$(4)_$*=false >> $(builddir)/skipped-dkms.mk; rc=0; fi; if [ "$$rc" != "0" ]; then exit $$rc; fi
+	rc=0; ARCH=$(build_arch) CROSS_COMPILE=$(CROSS_COMPILE) $(SHELL) $(DROOT)/scripts/dkms-build $(dkms_dir) $(abi_release)-$* '$(call build_dkms_sign,$(builddir)/build-$*)' $(1) $(2) $(3) $(4) $(5) ;
 endef
 
 define install_control =
@@ -265,6 +265,7 @@ endif
 	$(call install_control,$(bin_pkg_name)-$*,image,postinst postrm preinst prerm)
 	install -d $(pkgdir)/usr/lib/linux/triggers
 	$(call install_control,$(mods_pkg_name)-$*,extra,postinst postrm)
+
 ifeq ($(do_extras_package),true)
 	# Install the postinit/postrm scripts in the extras package.
 	if [ -f $(DEBIAN)/control.d/$(target_flavour).inclusion-list ] ; then	\
@@ -272,6 +273,7 @@ ifeq ($(do_extras_package),true)
 		$(call install_control,$(mods_extra_pkg_name)-$*,extra,postinst postrm); \
 	fi
 endif
+
 	$(foreach _m,$(all_standalone_dkms_modules), \
 	  $(if $(enable_$(_m)), \
 	    install -d $(dkms_$(_m)_pkgdir)/usr/lib/linux/triggers; \
@@ -323,34 +325,6 @@ endif
 	cp $(builddir)/build-$*/.config $(hdrdir)
 	chmod 644 $(hdrdir)/.config
 	$(kmake) O=$(hdrdir) -j1 syncconfig prepare scripts
-	# Cross-compile key scripts for target architecture.
-	# By hijacking HOSTCC, we use Kbuild to compile its own tools for the target architecture.
-	# The cmd_and_fixdep override prevents Kbuild from executing the newly built target-fixdep binary.
-	# The cmd_elfconfig='true' override prevents Kbuild from executing target-mk_elfconfig (which fails on x86).
-	@echo "Cross-compiling scripts for target architecture..."
-	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
-	-$(kmake) O=$(hdrdir) -j1 HOSTCC=$(CC) HOSTLD=$(CC) HOSTCFLAGS="-O2" \
-		cmd_and_fixdep='$$(cmd_$$(1))' \
-		cmd_elfconfig='true' \
-		scripts/basic/ scripts/mod/ scripts/genksyms/
-	# Validate headers tools architecture
-	@is_target_elf() { \
-		local elf_file="$$1"; \
-		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
-		local target_arch="$(arch)"; \
-		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
-		local actual_arch=$$(readelf -h "$$elf_file" | grep "Machine:" | cut -d: -f2- | xargs); \
-		echo "Audit $$elf_file: Machine = $$actual_arch (expected $$target_arch)"; \
-		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
-	}; \
-	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
-	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
-	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
-		echo "ERROR: Headers tools architecture mismatch detected after rebuild."; \
-		exit 1; \
-	else \
-		echo "Successfully cross-compiled scripts for target architecture."; \
-	fi
 	# We'll symlink this stuff
 	rm -f $(hdrdir)/Makefile
 	rm -rf $(hdrdir)/include2 $(hdrdir)/source
@@ -461,6 +435,40 @@ endif
 	  ) \
 	)
 
+# === After DKMS builds finish, cross-compile key scripts for target architecture ===
+# By hijacking HOSTCC, we use Kbuild to compile its own tools for the target architecture.
+# The cmd_and_fixdep override prevents Kbuild from executing the newly built target-fixdep binary.
+# The cmd_elfconfig='true' override prevents Kbuild from executing target-mk_elfconfig (which fails on x86).
+	@echo "Cross-compiling scripts for target architecture (post-DKMS)..."
+	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
+	# Workaround: Build inside the pristine build tree to prevent Kbuild from falling back
+	# to $(CURDIR) and polluting host x86 tools, which causes 'Exec format error'.
+	rm -f $(builddir)/build-$*/scripts/basic/fixdep $(builddir)/build-$*/scripts/mod/modpost $(builddir)/build-$*/scripts/genksyms/genksyms
+	-$(build_cd) $(kmake) $(build_O) -j1 HOSTCC=$(CC) HOSTLD=$(CC) HOSTCFLAGS="-O2" \
+		cmd_and_fixdep='$$(cmd_$$(1))' \
+		cmd_elfconfig='true' \
+		scripts/basic/ scripts/mod/ scripts/genksyms/
+	cp -p $(builddir)/build-$*/scripts/basic/fixdep $(hdrdir)/scripts/basic/fixdep || true
+	cp -p $(builddir)/build-$*/scripts/mod/modpost $(hdrdir)/scripts/mod/modpost || true
+	cp -p $(builddir)/build-$*/scripts/genksyms/genksyms $(hdrdir)/scripts/genksyms/genksyms || true
+# Validate headers tools architecture
+	@is_target_elf() { \
+		local elf_file="$$1"; \
+		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
+		local target_arch="$(arch)"; \
+		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
+		local actual_arch=$$(readelf -h "$$elf_file" | grep "Machine:" | cut -d: -f2- | xargs); \
+		echo "Audit $$elf_file: Machine = $$actual_arch (expected $$target_arch)"; \
+		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
+	}; \
+	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
+	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
+	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
+		echo "ERROR: Headers tools architecture mismatch detected after rebuild."; \
+		exit 1; \
+	else \
+		echo "Successfully cross-compiled scripts for target architecture."; \
+	fi
 
 ifneq ($(skipdbg),true)
 	# Add .gnu_debuglink sections to each stripped .ko
@@ -614,7 +622,6 @@ define dh_all
 	dh_builddeb -p$(1)
 endef
 define newline
-
 
 endef
 define dh_all_inline
@@ -780,7 +787,7 @@ endif
 endif
 ifeq ($(do_cloud_tools),true)
 ifeq ($(do_tools_hyperv),true)
-	cd $(builddirpa)/tools/hv && make CFLAGS="-I$(headers_dir)/usr/include -I$(headers_dir)/usr/include/$(DEB_HOST_MULTIARCH)" CROSS_COMPILE=$(CROSS_COMPILE) hv_kvp_daemon hv_vss_daemon hv_fcopy_daemon
+	cd $(builddirpa)/tools/hv && make CFLAGS="-I$(headers_dir)/usr/include -I$(headers_dir)/usr/include/$(DEB_HOST_MULTIARCH)" CROSS_COMPILE=$(CROSS_COMPILE) hv_kvp_daemon hv_vss_daemon hv_fcopy_dae
 endif
 endif
 	@touch $@
