@@ -330,18 +330,18 @@ endif
 	cp $(hdrdir)/scripts/genksyms/genksyms $(builddir)/build-$*/genksyms.host
 
 	# Cross-compile key scripts for target architecture.
-	# By hijacking HOSTCC, we use Kbuild to compile its own tools for the target architecture.
-	# The cmd_and_fixdep override prevents Kbuild from executing the newly built target-fixdep binary.
-	# The cmd_elfconfig='true' override prevents Kbuild from executing target-mk_elfconfig (which fails on x86).
-	# CONFIG_DEBUG_INFO_BTF= ensures Kbuild won't descend into bpf/resolve_btfids
-	# By specifying the exact file targets rather than directories, we avoid triggering host-tool crashes.
-	@echo "Cross-compiling scripts for target architecture..."
+	# By using the specific 'scripts' target instead of matching '/%' patterns, Kbuild
+	# will cleanly compile exactly what we need (fixdep, modpost, genksyms etc.) without 
+	# triggering the 'prepare' target and randomly descending into 'tools/bpf' or 'tools/objtool'.
+	# Overriding CONFIG_DEBUG_INFO_BTF/CONFIG_BPF/CONFIG_OBJTOOL is double safety to prevent descent.
+	@echo "Cross-compiling scripts for target architecture using Kbuild..."
 	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
 	$(kmake) O=$(hdrdir) -j1 HOSTCC=$(CC) HOSTLD=$(CC) HOSTCFLAGS="-O2" \
-		CONFIG_DEBUG_INFO_BTF= \
+		CONFIG_DEBUG_INFO_BTF= CONFIG_BPF= CONFIG_OBJTOOL= CONFIG_STACK_VALIDATION= \
 		cmd_and_fixdep='$$(cmd_$$(1))' \
 		cmd_elfconfig='true' \
-		scripts/basic/fixdep scripts/mod/modpost scripts/genksyms/genksyms
+		scripts
+	
 	# Validate headers tools architecture
 	@is_target_elf() { \
 		local elf_file="$$1"; \
