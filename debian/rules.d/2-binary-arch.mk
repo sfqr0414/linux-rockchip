@@ -323,6 +323,12 @@ endif
 	cp $(builddir)/build-$*/.config $(hdrdir)
 	chmod 644 $(hdrdir)/.config
 	$(kmake) O=$(hdrdir) -j1 syncconfig prepare scripts
+
+	# Save the host tools so they can be used locally by DKMS builds
+	cp $(hdrdir)/scripts/basic/fixdep $(builddir)/build-$*/fixdep.host
+	cp $(hdrdir)/scripts/mod/modpost $(builddir)/build-$*/modpost.host
+	cp $(hdrdir)/scripts/genksyms/genksyms $(builddir)/build-$*/genksyms.host
+
 	# Cross-compile key scripts for target architecture.
 	# By hijacking HOSTCC, we use Kbuild to compile its own tools for the target architecture.
 	# The cmd_and_fixdep override prevents Kbuild from executing the newly built target-fixdep binary.
@@ -351,6 +357,16 @@ endif
 	else \
 		echo "Successfully cross-compiled scripts for target architecture."; \
 	fi
+
+	# Move the target tools aside and restore host tools to hdrdir
+	# This ensures DKMS gets the x86 host tools during the package build process
+	mv $(hdrdir)/scripts/basic/fixdep $(builddir)/build-$*/fixdep.target
+	mv $(hdrdir)/scripts/mod/modpost $(builddir)/build-$*/modpost.target
+	mv $(hdrdir)/scripts/genksyms/genksyms $(builddir)/build-$*/genksyms.target
+	mv $(builddir)/build-$*/fixdep.host $(hdrdir)/scripts/basic/fixdep
+	mv $(builddir)/build-$*/modpost.host $(hdrdir)/scripts/mod/modpost
+	mv $(builddir)/build-$*/genksyms.host $(hdrdir)/scripts/genksyms/genksyms
+
 	# We'll symlink this stuff
 	rm -f $(hdrdir)/Makefile
 	rm -rf $(hdrdir)/include2 $(hdrdir)/source
@@ -454,6 +470,12 @@ endif
 	# Build a temporary "installed headers" directory.
 	install -d $(dkms_dir) $(dkms_dir)/headers $(dkms_dir)/build $(dkms_dir)/source
 	cp -rp "$(hdrdir)" "$(indep_hdrdir)" "$(dkms_dir)/headers"
+
+	# Now that dkms_dir has a copy of the x86_64 host tools for Runner/DKMS, 
+	# swap the target tools back into hdrdir for actual target user packaging
+	mv $(builddir)/build-$*/fixdep.target $(hdrdir)/scripts/basic/fixdep
+	mv $(builddir)/build-$*/modpost.target $(hdrdir)/scripts/mod/modpost
+	mv $(builddir)/build-$*/genksyms.target $(hdrdir)/scripts/genksyms/genksyms
 
 	$(foreach _m,$(all_dkms_modules), \
 	  $(if $(enable_$(_m)), \
