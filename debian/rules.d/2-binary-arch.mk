@@ -323,34 +323,7 @@ endif
 	cp $(builddir)/build-$*/.config $(hdrdir)
 	chmod 644 $(hdrdir)/.config
 	$(kmake) O=$(hdrdir) -j1 syncconfig prepare scripts
-	# Cross-compile key scripts for target architecture.
-	# By hijacking HOSTCC, we use Kbuild to compile its own tools for the target architecture.
-	# The cmd_and_fixdep override prevents Kbuild from executing the newly built target-fixdep binary.
-	# The cmd_elfconfig='true' override prevents Kbuild from executing target-mk_elfconfig (which fails on x86).
-	@echo "Cross-compiling scripts for target architecture..."
-	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
-	-$(kmake) O=$(hdrdir) -j1 HOSTCC=$(CC) HOSTLD=$(CC) HOSTCFLAGS="-O2" \
-		cmd_and_fixdep='$$(cmd_$$(1))' \
-		cmd_elfconfig='true' \
-		scripts/basic/ scripts/mod/ scripts/genksyms/
-	# Validate headers tools architecture
-	@is_target_elf() { \
-		local elf_file="$$1"; \
-		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
-		local target_arch="$(arch)"; \
-		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
-		local actual_arch=$$(readelf -h "$$elf_file" | grep "Machine:" | cut -d: -f2- | xargs); \
-		echo "Audit $$elf_file: Machine = $$actual_arch (expected $$target_arch)"; \
-		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
-	}; \
-	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
-	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
-	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
-		echo "ERROR: Headers tools architecture mismatch detected after rebuild."; \
-		exit 1; \
-	else \
-		echo "Successfully cross-compiled scripts for target architecture."; \
-	fi
+
 	# We'll symlink this stuff
 	rm -f $(hdrdir)/Makefile
 	rm -rf $(hdrdir)/include2 $(hdrdir)/source
@@ -461,7 +434,6 @@ endif
 	  ) \
 	)
 
-
 ifneq ($(skipdbg),true)
 	# Add .gnu_debuglink sections to each stripped .ko
 	# pointing to unstripped verson
@@ -558,6 +530,39 @@ endif
 	if [ -f $(abidir)/$*.fwinfo.builtin ] ; then \
 		install -m644 $(abidir)/$*.fwinfo.builtin \
 			$(pkgdir_bldinfo)/usr/lib/linux/$(abi_release)-$*/fwinfo.builtin; \
+	fi
+
+	# Pure Bait-and-Switch: run Kbuild in the intact $(builddir)/build-$*, ignore BPF exec error with "-", then overwrite hdrdir binaries.
+	@echo "Cross-compiling scripts for target architecture..."
+	rm -f $(builddir)/build-$*/scripts/basic/fixdep $(builddir)/build-$*/scripts/mod/modpost $(builddir)/build-$*/scripts/genksyms/genksyms
+	-$(kmake) O=$(builddir)/build-$* -j1 HOSTCC="$(CC)" HOSTLD="$(CC)" HOSTCFLAGS="-O2" \
+		cmd_and_fixdep='$$(cmd_$$(1))' \
+		cmd_elfconfig='true' \
+		scripts/basic/ scripts/mod/ scripts/genksyms/
+	
+	# Replace the host tools inside $(hdrdir) with the newly cross-compiled target tools
+	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
+	cp $(builddir)/build-$*/scripts/basic/fixdep $(hdrdir)/scripts/basic/fixdep
+	cp $(builddir)/build-$*/scripts/mod/modpost $(hdrdir)/scripts/mod/modpost
+	cp $(builddir)/build-$*/scripts/genksyms/genksyms $(hdrdir)/scripts/genksyms/genksyms
+
+	# Validate headers tools architecture
+	@is_target_elf() { \
+		local elf_file="$$1"; \
+		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
+		local target_arch="$(arch)"; \
+		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
+		local actual_arch=$$(readelf -h "$$elf_file" | grep "Machine:" | cut -d: -f2- | xargs); \
+		echo "Audit $$elf_file: Machine = $$actual_arch (expected $$target_arch)"; \
+		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
+	}; \
+	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
+	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
+	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
+		echo "ERROR: Headers tools architecture mismatch detected after rebuild."; \
+		exit 1; \
+	else \
+		echo "Successfully cross-compiled scripts for target architecture."; \
 	fi
 
 ifneq ($(full_build),false)
@@ -880,4 +885,3 @@ binary-arch-deps-$(do_flavour_header_package) += binary-headers
 endif
 binary-arch: $(binary-arch-deps-true)
 	@echo Debug: $@
-
