@@ -71,7 +71,7 @@ define build_dkms_sign =
 	)
 endef
 define build_dkms =
-	rc=0; ARCH=$(build_arch) CROSS_COMPILE=$(CROSS_COMPILE) $(SHELL) $(DROOT)/scripts/dkms-build $(dkms_dir) $(abi_release)-$* '$(call build_dkms_sign,$(builddir)/build-$*)' $(1) $(2) $(3) $(4) $(5) || rc=$$?; if [ "$$rc" = "9" ]; then echo do_$(4)_$*=false >> $(builddir)/skipped-dkms.mk; rc=0; fi; if [ "$$rc" != "0" ]; then exit $$rc; fi
+	rc=0; ARCH=$(build_arch) CROSS_COMPILE=$(CROSS_COMPILE) $(SHELL) $(DROOT)/scripts/dkms-build $(dkms_dir) $(abi_release)-$* '$(call build_dkms_sign,$(builddir)/build-$*)' $(1) $(2) $(3) $(4) $(5) ;
 endef
 
 define install_control =
@@ -105,17 +105,6 @@ $(stampdir)/stamp-install-%: pkgdir_bldinfo = $(CURDIR)/debian/$(bldinfo_pkg_nam
 $(stampdir)/stamp-install-%: bindoc = $(pkgdir)/usr/share/doc/$(bin_pkg_name)-$*
 $(stampdir)/stamp-install-%: dbgpkgdir = $(CURDIR)/debian/$(bin_pkg_name)-$*-dbgsym
 $(stampdir)/stamp-install-%: signingv = $(CURDIR)/debian/$(bin_pkg_name)-signing/$(release)-$(revision)
-$(stampdir)/stamp-install-%: toolspkgdir = $(CURDIR)/debian/$(tools_flavour_pkg_name)-$*
-$(stampdir)/stamp-install-%: cloudpkgdir = $(CURDIR)/debian/$(cloud_flavour_pkg_name)-$*
-$(stampdir)/stamp-install-%: basepkg = $(hdrs_pkg_name)
-$(stampdir)/stamp-install-%: indeppkg = $(indep_hdrs_pkg_name)
-$(stampdir)/stamp-install-%: kernfile = $(call custom_override,kernel_file,$*)
-$(stampdir)/stamp-install-%: instfile = $(call custom_override,install_file,$*)
-$(stampdir)/stamp-install-%: hdrdir = $(CURDIR)/debian/$(basepkg)-$*/usr/src/$(basepkg)-$*
-$(stampdir)/stamp-install-%: target_flavour = $*
-$(stampdir)/stamp-install-%: MODHASHALGO=sha512
-$(stampdir)/stamp-install-%: MODSECKEY=$(builddir)/build-$*/certs/signing_key.pem
-$(stampdir)/stamp-install-%: MODPUBKEY=$(builddir)/build-$*/certs/signing_key.x509
 $(stampdir)/stamp-install-%: build_dir=$(builddir)/build-$*
 $(stampdir)/stamp-install-%: dkms_dir=$(call dkms_dir_prefix,$(builddir)/build-$*)
 $(foreach _m,$(all_dkms_modules), \
@@ -135,136 +124,6 @@ $(stampdir)/stamp-install-%: $(stampdir)/stamp-build-% $(stampdir)/stamp-install
 ifneq ($(skipdbg),true)
 	dh_prep -p$(bin_pkg_name)-$*-dbgsym
 endif
-ifeq ($(do_extras_package),true)
-	dh_prep -p$(mods_extra_pkg_name)-$*
-endif
-
-	# The main image
-	# compress_file logic required because not all architectures
-	# generate a zImage automatically out of the box
-ifeq ($(compress_file),)
-	install -m600 -D $(builddir)/build-$*/$(kernfile) \
-		$(pkgdir_bin)/boot/$(instfile)-$(abi_release)-$*
-else
-	install -d $(pkgdir_bin)/boot
-	gzip -c9v $(builddir)/build-$*/$(kernfile) > \
-		$(pkgdir_bin)/boot/$(instfile)-$(abi_release)-$*
-	chmod 600 $(pkgdir_bin)/boot/$(instfile)-$(abi_release)-$*
-endif
-
-ifeq ($(uefi_signed),true)
-	install -d $(signingv)
-	# gzipped kernel images must be decompressed for signing
-	if [[ "$(kernfile)" =~ \.gz$$ ]]; then \
-		< $(pkgdir_bin)/boot/$(instfile)-$(abi_release)-$* \
-			gunzip -cv > $(signingv)/$(instfile)-$(abi_release)-$*.efi; \
-		cp -p --attributes-only $(pkgdir_bin)/boot/$(instfile)-$(abi_release)-$* \
-			$(signingv)/$(instfile)-$(abi_release)-$*.efi; \
-		echo "GZIP=1" >> $(signingv)/$(instfile)-$(abi_release)-$*.efi.vars; \
-	else \
-		cp -p $(pkgdir_bin)/boot/$(instfile)-$(abi_release)-$* \
-			$(signingv)/$(instfile)-$(abi_release)-$*.efi; \
-	fi
-endif
-ifeq ($(opal_signed),true)
-	install -d $(signingv)
-	cp -p $(pkgdir_bin)/boot/$(instfile)-$(abi_release)-$* \
-		$(signingv)/$(instfile)-$(abi_release)-$*.opal;
-endif
-ifeq ($(sipl_signed),true)
-	install -d $(signingv)
-	cp -p $(pkgdir_bin)/boot/$(instfile)-$(abi_release)-$* \
-		$(signingv)/$(instfile)-$(abi_release)-$*.sipl;
-endif
-
-	install -d $(pkgdir)/boot
-	install -m644 $(builddir)/build-$*/.config \
-		$(pkgdir)/boot/config-$(abi_release)-$*
-	install -m600 $(builddir)/build-$*/System.map \
-		$(pkgdir)/boot/System.map-$(abi_release)-$*
-
-ifeq ($(do_dtbs),true)
-	$(build_cd) $(kmake) $(build_O) $(conc_level) dtbs_install \
-		INSTALL_DTBS_PATH=$(pkgdir)/lib/firmware/$(abi_release)-$*/device-tree
-endif
-
-ifeq ($(no_dumpfile),)
-	makedumpfile -g $(pkgdir)/boot/vmcoreinfo-$(abi_release)-$* \
-		-x $(builddir)/build-$*/vmlinux
-	chmod 0600 $(pkgdir)/boot/vmcoreinfo-$(abi_release)-$*
-endif
-
-	$(build_cd) $(kmake) $(build_O) $(conc_level) modules_install $(vdso) \
-		INSTALL_MOD_STRIP=1 INSTALL_MOD_PATH=$(pkgdir)/ \
-		INSTALL_FW_PATH=$(pkgdir)/lib/firmware/$(abi_release)-$*
-
-	#
-	# Build module blacklists:
-	#  - blacklist all watchdog drivers (LP:1432837)
-	#
-	install -d $(pkgdir)/lib/modprobe.d
-	echo "# Kernel supplied blacklist for $(src_pkg_name) $(abi_release)-$* $(arch)" \
-		>$(pkgdir)/lib/modprobe.d/blacklist_$(src_pkg_name)_$(abi_release)-$*.conf
-	for conf in $(arch)-$* $(arch) common.conf; do \
-		if [ -f $(DEBIAN)/modprobe.d/$$conf ]; then \
-			echo "# modprobe.d/$$conf"; \
-			cat $(DEBIAN)/modprobe.d/$$conf; \
-		fi; \
-	done >>$(pkgdir)/lib/modprobe.d/blacklist_$(src_pkg_name)_$(abi_release)-$*.conf
-	echo "# Autogenerated watchdog blacklist" \
-		>>$(pkgdir)/lib/modprobe.d/blacklist_$(src_pkg_name)_$(abi_release)-$*.conf
-	ls -1 $(pkgdir)/lib/modules/$(abi_release)-$*/kernel/drivers/watchdog/ | \
-		grep -v '^bcm2835_wdt$$' | \
-		sed -e 's/^/blacklist /' -e 's/.ko$$//' | \
-		sort -u \
-		>>$(pkgdir)/lib/modprobe.d/blacklist_$(src_pkg_name)_$(abi_release)-$*.conf
-
-ifeq ($(do_extras_package),true)
-	#
-	# Remove all modules not in the inclusion list.
-	#
-	if [ -f $(DEBIAN)/control.d/$(target_flavour).inclusion-list ] ; then \
-		/sbin/depmod -v -b $(pkgdir) $(abi_release)-$* | \
-			sed -e "s@$(pkgdir)/lib/modules/$(abi_release)-$*/kernel/@@g" | \
-			awk '{ print $$1 " " $$NF}' >$(build_dir)/module-inclusion.depmap; \
-		mkdir -p $(pkgdir_ex)/lib/modules/$(abi_release)-$*; \
-		mv $(pkgdir)/lib/modules/$(abi_release)-$*/kernel \
-			$(pkgdir_ex)/lib/modules/$(abi_release)-$*/kernel; \
-		$(SHELL) $(DROOT)/scripts/module-inclusion --master \
-			$(pkgdir_ex)/lib/modules/$(abi_release)-$*/kernel \
-			$(pkgdir)/lib/modules/$(abi_release)-$*/kernel \
-			$(DEBIAN)/control.d/$(target_flavour).inclusion-list \
-			$(build_dir)/module-inclusion.depmap 2>&1 | \
-				tee $(target_flavour).inclusion-list.log; \
-		/sbin/depmod -b $(pkgdir) -ea -F $(pkgdir)/boot/System.map-$(abi_release)-$* \
-			$(abi_release)-$* 2>&1 |tee $(target_flavour).depmod.log; \
-		if [ `grep -c 'unknown symbol' $(target_flavour).depmod.log` -gt 0 ]; then \
-			echo "EE: Unresolved module dependencies in base package!"; \
-			exit 1; \
-		fi \
-	fi
-endif
-
-ifeq ($(no_dumpfile),)
-	makedumpfile -g $(pkgdir)/boot/vmcoreinfo-$(abi_release)-$* \
-		-x $(builddir)/build-$*/vmlinux
-	chmod 0600 $(pkgdir)/boot/vmcoreinfo-$(abi_release)-$*
-endif
-	rm -f $(pkgdir)/lib/modules/$(abi_release)-$*/build
-	rm -f $(pkgdir)/lib/modules/$(abi_release)-$*/source
-
-	# Some initramfs-tools specific modules
-	install -d $(pkgdir)/lib/modules/$(abi_release)-$*/initrd
-	if [ -f $(pkgdir)/lib/modules/$(abi_release)-$*/kernel/drivers/video/vesafb.ko ]; then\
-	  $(LN) $(pkgdir)/lib/modules/$(abi_release)-$*/kernel/drivers/video/vesafb.ko \
-		$(pkgdir)/lib/modules/$(abi_release)-$*/initrd/; \
-	fi
-
-	echo "interest linux-update-$(abi_release)-$*" >"$(DROOT)/$(bin_pkg_name)-$*.triggers"
-	install -d $(pkgdir_bin)/usr/lib/linux/triggers
-	$(call install_control,$(bin_pkg_name)-$*,image,postinst postrm preinst prerm)
-	install -d $(pkgdir)/usr/lib/linux/triggers
-	$(call install_control,$(mods_pkg_name)-$*,extra,postinst postrm)
 ifeq ($(do_extras_package),true)
 	# Install the postinit/postrm scripts in the extras package.
 	if [ -f $(DEBIAN)/control.d/$(target_flavour).inclusion-list ] ; then	\
@@ -323,34 +182,6 @@ endif
 	cp $(builddir)/build-$*/.config $(hdrdir)
 	chmod 644 $(hdrdir)/.config
 	$(kmake) O=$(hdrdir) -j1 syncconfig prepare scripts
-	# Cross-compile key scripts for target architecture.
-	# By hijacking HOSTCC, we use Kbuild to compile its own tools for the target architecture.
-	# The cmd_and_fixdep override prevents Kbuild from executing the newly built target-fixdep binary.
-	# The cmd_elfconfig='true' override prevents Kbuild from executing target-mk_elfconfig (which fails on x86).
-	@echo "Cross-compiling scripts for target architecture..."
-	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
-	-$(kmake) O=$(hdrdir) -j1 HOSTCC=$(CC) HOSTLD=$(CC) HOSTCFLAGS="-O2" \
-		cmd_and_fixdep='$$(cmd_$$(1))' \
-		cmd_elfconfig='true' \
-		scripts/basic/ scripts/mod/ scripts/genksyms/
-	# Validate headers tools architecture
-	@is_target_elf() { \
-		local elf_file="$$1"; \
-		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
-		local target_arch="$(arch)"; \
-		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
-		local actual_arch=$$(readelf -h "$$elf_file" | grep "Machine:" | cut -d: -f2- | xargs); \
-		echo "Audit $$elf_file: Machine = $$actual_arch (expected $$target_arch)"; \
-		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
-	}; \
-	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
-	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
-	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
-		echo "ERROR: Headers tools architecture mismatch detected after rebuild."; \
-		exit 1; \
-	else \
-		echo "Successfully cross-compiled scripts for target architecture."; \
-	fi
 	# We'll symlink this stuff
 	rm -f $(hdrdir)/Makefile
 	rm -rf $(hdrdir)/include2 $(hdrdir)/source
@@ -461,6 +292,40 @@ endif
 	  ) \
 	)
 
+# === After DKMS builds finish, cross-compile key scripts for target architecture ===
+# By hijacking HOSTCC, we use Kbuild to compile its own tools for the target architecture.
+# The cmd_and_fixdep override prevents Kbuild from executing the newly built target-fixdep binary.
+# The cmd_elfconfig='true' override prevents Kbuild from executing target-mk_elfconfig (which fails on x86).
+	@echo "Cross-compiling scripts for target architecture (post-DKMS)..."
+	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
+	# Workaround: Build inside the pristine build tree to prevent Kbuild from falling back
+	# to $(CURDIR) and polluting host x86 tools, which causes 'Exec format error'.
+	rm -f $(builddir)/build-$*/scripts/basic/fixdep $(builddir)/build-$*/scripts/mod/modpost $(builddir)/build-$*/scripts/genksyms/genksyms
+	-$(build_cd) $(kmake) $(build_O) -j1 HOSTCC=$(CC) HOSTLD=$(CC) HOSTCFLAGS="-O2" \
+		cmd_and_fixdep='$$(cmd_$$(1))' \
+		cmd_elfconfig='true' \
+		scripts/basic/ scripts/mod/ scripts/genksyms/
+	cp -p $(builddir)/build-$*/scripts/basic/fixdep $(hdrdir)/scripts/basic/fixdep || true
+	cp -p $(builddir)/build-$*/scripts/mod/modpost $(hdrdir)/scripts/mod/modpost || true
+	cp -p $(builddir)/build-$*/scripts/genksyms/genksyms $(hdrdir)/scripts/genksyms/genksyms || true
+# Validate headers tools architecture
+	@is_target_elf() { \
+		local elf_file="$$1"; \
+		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
+		local target_arch="$(arch)"; \
+		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
+		local actual_arch=$$(readelf -h "$$elf_file" | grep "Machine:" | cut -d: -f2- | xargs); \
+		echo "Audit $$elf_file: Machine = $$actual_arch (expected $$target_arch)"; \
+		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
+	}; \
+	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
+	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
+	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
+		echo "ERROR: Headers tools architecture mismatch detected after rebuild."; \
+		exit 1; \
+	else \
+		echo "Successfully cross-compiled scripts for target architecture."; \
+	fi
 
 ifneq ($(skipdbg),true)
 	# Add .gnu_debuglink sections to each stripped .ko
@@ -614,7 +479,6 @@ define dh_all
 	dh_builddeb -p$(1)
 endef
 define newline
-
 
 endef
 define dh_all_inline
@@ -780,7 +644,7 @@ endif
 endif
 ifeq ($(do_cloud_tools),true)
 ifeq ($(do_tools_hyperv),true)
-	cd $(builddirpa)/tools/hv && make CFLAGS="-I$(headers_dir)/usr/include -I$(headers_dir)/usr/include/$(DEB_HOST_MULTIARCH)" CROSS_COMPILE=$(CROSS_COMPILE) hv_kvp_daemon hv_vss_daemon hv_fcopy_daemon
+	cd $(builddirpa)/tools/hv && make CFLAGS="-I$(headers_dir)/usr/include -I$(headers_dir)/usr/include/$(DEB_HOST_MULTIARCH)" CROSS_COMPILE=$(CROSS_COMPILE) hv_kvp_daemon hv_vss_daemon hv_fcopy_dae
 endif
 endif
 	@touch $@
@@ -854,29 +718,4 @@ ifeq ($(do_cloud_tools),true)
 endif
 
 binary-debs: signing = $(CURDIR)/debian/$(bin_pkg_name)-signing
-binary-debs: signingv = $(CURDIR)/debian/$(bin_pkg_name)-signing/$(release)-$(revision)
-binary-debs: signing_tar = $(src_pkg_name)_$(release)-$(revision)_$(arch).tar.gz
-binary-debs: binary-perarch $(addprefix binary-,$(flavours))
-	@echo Debug: $@
-ifeq ($(any_signed),true)
-	install -d $(signingv)/control
-	{ echo "tarball"; } >$(signingv)/control/options
-	cd $(signing) && tar czvf ../../../$(signing_tar) .
-	dpkg-distaddfile $(signing_tar) raw-signing -
-endif
-
-build-arch-deps-$(do_flavour_image_package) += $(addprefix $(stampdir)/stamp-install-,$(flavours))
-build-arch: $(build-arch-deps-true)
-	@echo Debug: $@
-
-ifeq ($(AUTOBUILD),)
-binary-arch-deps-$(do_flavour_image_package) += binary-debs
-else
-binary-arch-deps-$(do_flavour_image_package) = binary-debs
-endif
-binary-arch-deps-$(do_libc_dev_package) += binary-arch-headers
-ifneq ($(do_common_headers_indep),true)
-binary-arch-deps-$(do_flavour_header_package) += binary-headers
-endif
-binary-arch: $(binary-arch-deps-true)
-	@echo Debug: $@
+binary-debs: signingv = $(CURDIR)/debian/$(bin_pkg_name)-signing/$(release)-$(re
