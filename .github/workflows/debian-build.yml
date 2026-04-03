@@ -1,0 +1,106 @@
+name: Debian Kernel Build
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      ubuntu-version:
+        description: 'Select Target Ubuntu Version'
+        required: true
+        type: choice
+        options:
+          - 'ubuntu-22.04'
+          - 'ubuntu-24.04'
+          - 'ubuntu-25.04'
+        default: 'ubuntu-24.04'
+  schedule:
+    - cron: '0 0 * * *'
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  build-debian-packages:
+    runs-on: ${{ github.event.inputs['ubuntu-version'] || 'ubuntu-24.04' }}
+    env:
+      TARGET_TAG: ${{ github.event.inputs['ubuntu-version'] || 'ubuntu-24.04' }}
+    
+    steps:
+      - name: Cleanup workspace
+        run: |
+          sudo docker system prune -a -f || true
+          sudo apt-get clean
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost || true
+          df -h
+
+      - name: Hard-disable Snapd
+        run: |
+          sudo systemctl stop snapd.service snapd.socket snapd.seeded.service || true
+          sudo systemctl disable snapd.service snapd.socket snapd.seeded.service || true
+          sudo apt-get purge -y snapd || true
+          sudo rm -rf /snap /var/lib/snapd /var/cache/snapd /usr/lib/snapd || true
+          sudo mount | grep snap | cut -d ' ' -f 3 | xargs -r sudo umount -l || true
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Make script executable
+        run: chmod +x scripts/test-debian-build.sh
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get upgrade -y
+          sudo apt-get install -y --no-install-recommends \
+            lsb-release debhelper fakeroot build-essential dpkg-dev devscripts \
+            bc bison flex libssl-dev libncurses-dev libelf-dev dwarves \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            git wget libterm-readline-gnu-perl \
+            gawk cpio kmod
+
+      - name: Run Debian kernel build script
+        run: ./scripts/test-debian-build.sh
+
+      - name: Move built packages into workspace
+        run: |
+          set -euo pipefail
+          PARENT_DIR="$(dirname "$GITHUB_WORKSPACE")"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          echo "Parent dir: $PARENT_DIR"
+          mkdir -p built_packages
+
+          # 防止 glob 未命中时返回字面字符串
+          shopt -s nullglob
+          files=( "$PARENT_DIR"/built_packages/*.deb )
+
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "Warning: no .deb files found in $PARENT_DIR/built_packages"
+            # 若希望在未找到包时失败，可取消下一行注释：
+            # exit 1
+          else
+            echo "Moving ${#files[@]} .deb file(s) from $PARENT_DIR/built_packages -> $GITHUB_WORKSPACE/built_packages"
+            mv -v "${files[@]}" built_packages/
+            ls -lh built_packages || true
+          fi
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-packages-${{ env.TARGET_TAG }}
+          path: built_packages/*.deb
+
+      - name: Create Release and Upload Assets
+        if: ${{ (github.event_name != 'pull_request' || github.repository == github.event.pull_request.head.repo.full_name) && github.event_name != 'schedule' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TARGET_TAG }}
+          name: "Debian Kernel Packages for ${{ env.TARGET_TAG }}"
+          body: "Automated kernel build artifacts for ${{ env.TARGET_TAG }}."
+          files: built_packages/*.deb
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
