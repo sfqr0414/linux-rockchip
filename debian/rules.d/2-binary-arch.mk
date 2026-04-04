@@ -323,7 +323,6 @@ endif
 	cp $(builddir)/build-$*/.config $(hdrdir)
 	chmod 644 $(hdrdir)/.config
 	$(kmake) O=$(hdrdir) -j1 syncconfig prepare scripts
-
 	# We'll symlink this stuff
 	rm -f $(hdrdir)/Makefile
 	rm -rf $(hdrdir)/include2 $(hdrdir)/source
@@ -434,57 +433,6 @@ endif
 	  ) \
 	)
 
-	# =====================================================================
-	# Pure "狸猫换太子" (Bait-and-Switch) at the very end.
-	# At this point, DKMS has already finished using the x86 host tools.
-	# We now re-invoke Kbuild to cross-compile the host tools in hdrdir for the 
-	# target architecture right before packaging.
-	# 
-	# Requirements:
-	# 1. No interference with the mid-process tools (DKMS consumed them cleanly).
-	# 2. No backup (.host) or restore (.target) mechanisms.
-	# 3. Kbuild is explicitly told to build both `scripts` AND `scripts_mod` 
-	#    so that modpost isn't left behind.
-	# 4. Old objects and executables are nuked beforehand to force a true cross-compile.
-	# =====================================================================
-	@echo "Cross-compiling scripts for target architecture using Kbuild..."
-	
-	# Scrub the old x86_64 host tools and objects so Kbuild doesn't try to link them
-	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/basic/*.o $(hdrdir)/scripts/basic/.*.cmd
-	rm -f $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/mod/*.o $(hdrdir)/scripts/mod/.*.cmd
-	rm -f $(hdrdir)/scripts/genksyms/genksyms $(hdrdir)/scripts/genksyms/*.o $(hdrdir)/scripts/genksyms/.*.cmd
-	
-	# Re-run Kbuild targeting our target arch. scripts_mod ensures modpost is built.
-	# CONFIG overrides ensure we don't accidentally descend into BPF or objtool.
-	$(kmake) O=$(hdrdir) -j1 HOSTCC="$(CC)" HOSTLD="$(CC)" HOSTCFLAGS="-O2" \
-		CONFIG_DEBUG_INFO_BTF= CONFIG_RESOLVE_BTFIDS= CONFIG_BPF= CONFIG_OBJTOOL= CONFIG_STACK_VALIDATION= \
-		cmd_and_fixdep='$$(cmd_$$(1))' \
-		cmd_elfconfig='true' \
-		scripts scripts_mod
-	
-	# Clean up any wrapper Makefile Kbuild might have automatically regenerated
-	rm -f $(hdrdir)/Makefile
-
-	# Validate headers tools architecture to guarantee success before packing
-	@is_target_elf() { \
-		local elf_file="$$1"; \
-		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
-		local target_arch="$(arch)"; \
-		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
-		local actual_arch=$$(readelf -h "$$elf_file" | grep "Machine:" | cut -d: -f2- | xargs); \
-		echo "Audit $$elf_file: Machine = $$actual_arch (expected $$target_arch)"; \
-		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
-	}; \
-	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
-	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
-	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
-		echo "ERROR: Headers tools architecture mismatch detected after rebuild."; \
-		exit 1; \
-	else \
-		echo "Successfully cross-compiled scripts for target architecture."; \
-	fi
-
-
 ifneq ($(skipdbg),true)
 	# Add .gnu_debuglink sections to each stripped .ko
 	# pointing to unstripped verson
@@ -581,6 +529,39 @@ endif
 	if [ -f $(abidir)/$*.fwinfo.builtin ] ; then \
 		install -m644 $(abidir)/$*.fwinfo.builtin \
 			$(pkgdir_bldinfo)/usr/lib/linux/$(abi_release)-$*/fwinfo.builtin; \
+	fi
+
+	# =====================================================================
+	# Pure "狸猫换太子" (Bait-and-Switch) at the very end.
+	# The original command proven to work, placed at the final stage 
+	# where the "Exec format error" from BPF tools won't derail DKMS.
+	# =====================================================================
+	@echo "Cross-compiling scripts for target architecture..."
+	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
+	-$(kmake) O=$(hdrdir) -j1 HOSTCC="$(CC)" HOSTLD="$(CC)" HOSTCFLAGS="-O2" \
+		cmd_and_fixdep='$$(cmd_$$(1))' \
+		cmd_elfconfig='true' \
+		scripts/basic/ scripts/mod/ scripts/genksyms/
+	# Kbuild might regenerate a wrapper Makefile, clean it out before packing.
+	rm -f $(hdrdir)/Makefile
+	
+	# Validate headers tools architecture
+	@is_target_elf() { \
+		local elf_file="$$1"; \
+		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
+		local target_arch="$(arch)"; \
+		[ "$$target_arch" = "arm64" ] && target_arch="aarch64"; \
+		local actual_arch=$$(readelf -h "$$elf_file" | grep "Machine:" | cut -d: -f2- | xargs); \
+		echo "Audit $$elf_file: Machine = $$actual_arch (expected $$target_arch)"; \
+		readelf -h "$$elf_file" | grep -iq "Machine:.*$$target_arch"; \
+	}; \
+	if ! is_target_elf "$(hdrdir)/scripts/basic/fixdep" || \
+	   ! is_target_elf "$(hdrdir)/scripts/genksyms/genksyms" || \
+	   ! is_target_elf "$(hdrdir)/scripts/mod/modpost"; then \
+		echo "ERROR: Headers tools architecture mismatch detected after rebuild."; \
+		exit 1; \
+	else \
+		echo "Successfully cross-compiled scripts for target architecture."; \
 	fi
 
 ifneq ($(full_build),false)
