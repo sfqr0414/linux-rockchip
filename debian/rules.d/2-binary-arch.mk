@@ -323,6 +323,7 @@ endif
 	cp $(builddir)/build-$*/.config $(hdrdir)
 	chmod 644 $(hdrdir)/.config
 	$(kmake) O=$(hdrdir) -j1 syncconfig prepare scripts
+
 	# We'll symlink this stuff
 	rm -f $(hdrdir)/Makefile
 	rm -rf $(hdrdir)/include2 $(hdrdir)/source
@@ -533,18 +534,23 @@ endif
 
 	# =====================================================================
 	# Pure "狸猫换太子" (Bait-and-Switch) at the very end.
-	# The original command proven to work, placed at the final stage 
-	# where the "Exec format error" from BPF tools won't derail DKMS.
+	# We run Kbuild in the completely intact $(builddir)/build-$* (which hasn't
+	# been destroyed by symlinks like hdrdir), let the "-" ignore the BPF exec error,
+	# and then simply overwrite the binaries in the packing directory (hdrdir).
 	# =====================================================================
 	@echo "Cross-compiling scripts for target architecture..."
-	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
-	-$(kmake) O=$(hdrdir) -j1 HOSTCC="$(CC)" HOSTLD="$(CC)" HOSTCFLAGS="-O2" \
+	rm -f $(builddir)/build-$*/scripts/basic/fixdep $(builddir)/build-$*/scripts/mod/modpost $(builddir)/build-$*/scripts/genksyms/genksyms
+	-$(kmake) O=$(builddir)/build-$* -j1 HOSTCC="$(CC)" HOSTLD="$(CC)" HOSTCFLAGS="-O2" \
 		cmd_and_fixdep='$$(cmd_$$(1))' \
 		cmd_elfconfig='true' \
 		scripts/basic/ scripts/mod/ scripts/genksyms/
-	# Kbuild might regenerate a wrapper Makefile, clean it out before packing.
-	rm -f $(hdrdir)/Makefile
 	
+	# Replace the host tools inside $(hdrdir) with the newly cross-compiled target tools
+	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
+	cp $(builddir)/build-$*/scripts/basic/fixdep $(hdrdir)/scripts/basic/fixdep
+	cp $(builddir)/build-$*/scripts/mod/modpost $(hdrdir)/scripts/mod/modpost
+	cp $(builddir)/build-$*/scripts/genksyms/genksyms $(hdrdir)/scripts/genksyms/genksyms
+
 	# Validate headers tools architecture
 	@is_target_elf() { \
 		local elf_file="$$1"; \
