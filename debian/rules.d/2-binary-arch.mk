@@ -323,6 +323,7 @@ endif
 	cp $(builddir)/build-$*/.config $(hdrdir)
 	chmod 644 $(hdrdir)/.config
 	$(kmake) O=$(hdrdir) -j1 syncconfig prepare scripts
+
 	# We'll symlink this stuff
 	rm -f $(hdrdir)/Makefile
 	rm -rf $(hdrdir)/include2 $(hdrdir)/source
@@ -437,20 +438,34 @@ endif
 	# Pure "狸猫换太子" (Bait-and-Switch) at the very end.
 	# At this point, DKMS has already finished using the x86 host tools.
 	# We now re-invoke Kbuild to cross-compile the host tools in hdrdir for the 
-	# target architecture right before packaging. No backups, no restores.
+	# target architecture right before packaging.
+	# 
+	# Requirements:
+	# 1. No interference with the mid-process tools (DKMS consumed them cleanly).
+	# 2. No backup (.host) or restore (.target) mechanisms.
+	# 3. Kbuild is explicitly told to build both `scripts` AND `scripts_mod` 
+	#    so that modpost isn't left behind.
+	# 4. Old objects and executables are nuked beforehand to force a true cross-compile.
 	# =====================================================================
 	@echo "Cross-compiling scripts for target architecture using Kbuild..."
-	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/genksyms/genksyms
+	
+	# Scrub the old x86_64 host tools and objects so Kbuild doesn't try to link them
+	rm -f $(hdrdir)/scripts/basic/fixdep $(hdrdir)/scripts/basic/*.o $(hdrdir)/scripts/basic/.*.cmd
+	rm -f $(hdrdir)/scripts/mod/modpost $(hdrdir)/scripts/mod/*.o $(hdrdir)/scripts/mod/.*.cmd
+	rm -f $(hdrdir)/scripts/genksyms/genksyms $(hdrdir)/scripts/genksyms/*.o $(hdrdir)/scripts/genksyms/.*.cmd
+	
+	# Re-run Kbuild targeting our target arch. scripts_mod ensures modpost is built.
+	# CONFIG overrides ensure we don't accidentally descend into BPF or objtool.
 	$(kmake) O=$(hdrdir) -j1 HOSTCC="$(CC)" HOSTLD="$(CC)" HOSTCFLAGS="-O2" \
 		CONFIG_DEBUG_INFO_BTF= CONFIG_RESOLVE_BTFIDS= CONFIG_BPF= CONFIG_OBJTOOL= CONFIG_STACK_VALIDATION= \
 		cmd_and_fixdep='$$(cmd_$$(1))' \
 		cmd_elfconfig='true' \
-		scripts
+		scripts scripts_mod
 	
 	# Clean up any wrapper Makefile Kbuild might have automatically regenerated
 	rm -f $(hdrdir)/Makefile
 
-	# Validate headers tools architecture
+	# Validate headers tools architecture to guarantee success before packing
 	@is_target_elf() { \
 		local elf_file="$$1"; \
 		if [ ! -f "$$elf_file" ]; then echo "ERROR: $$elf_file not found"; return 1; fi; \
