@@ -699,9 +699,9 @@ static const struct file_operations rknpu_drm_driver_fops = {
 
 static struct drm_driver rknpu_drm_driver = {
 #if KERNEL_VERSION(5, 4, 0) <= LINUX_VERSION_CODE
-	.driver_features = DRIVER_GEM | DRIVER_RENDER,
+	.driver_features = DRIVER_GEM,
 #else
-	.driver_features = DRIVER_GEM | DRIVER_PRIME | DRIVER_RENDER,
+	.driver_features = DRIVER_GEM | DRIVER_PRIME,
 #endif
 #if KERNEL_VERSION(6, 1, 0) > LINUX_VERSION_CODE
 	.gem_free_object_unlocked = rknpu_gem_free_object,
